@@ -186,6 +186,8 @@ const COMMAND_FIELDS_TO_STRIP = new Set([
   "integration_types",
   "contexts",
   "nsfw",
+  "name_localizations",
+  "description_localizations",
 ]);
 
 function normalizeCommandValue(value: unknown): unknown {
@@ -195,7 +197,7 @@ function normalizeCommandValue(value: unknown): unknown {
 
   if (value && typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([key]) => !COMMAND_FIELDS_TO_STRIP.has(key))
+      .filter(([key, nestedValue]) => !COMMAND_FIELDS_TO_STRIP.has(key) && nestedValue !== undefined && nestedValue !== null)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, nestedValue]) => [key, normalizeCommandValue(nestedValue)] as const);
     return Object.fromEntries(entries);
@@ -212,6 +214,33 @@ function createRestClient(token: string): REST {
   return new REST({ version: "10" }).setToken(token);
 }
 
+async function syncCommandScope(args: {
+  body: unknown[];
+  expectedNames: string[];
+  logger?: Pick<LoggerLike, "info">;
+  rest: RestLike;
+  route: `/${string}`;
+  scope: "global" | "guild";
+  targetId: string | null;
+}): Promise<boolean> {
+  const label = args.scope === "guild" && args.targetId ? `dev guild ${args.targetId}` : "global scope";
+  args.logger?.info(`Fetching currently registered commands for ${label}`);
+  const current = (await args.rest.get(args.route)) as unknown[];
+  args.logger?.info(
+    `Fetched ${current.length} current command(s) for ${label}; expected ${args.body.length}: ${args.expectedNames.join(", ")}`,
+  );
+
+  if (commandsMatch(current, args.body)) {
+    args.logger?.info(`Commands for ${label} already match expected definition`);
+    return false;
+  }
+
+  args.logger?.info(`Detected command drift for ${label}; updating commands`);
+  await args.rest.put(args.route, { body: args.body });
+  args.logger?.info(`Finished syncing commands for ${label}`);
+  return true;
+}
+
 export async function syncCommandsIfNeeded(
   config: AppConfig,
   logger?: Pick<LoggerLike, "info">,
@@ -219,59 +248,40 @@ export async function syncCommandsIfNeeded(
 ): Promise<CommandSyncResult> {
   const body = buildCommandRegistrationBody();
   const commandNames = buildCommands().map((command) => command.name);
+  const globalRoute = Routes.applicationCommands(config.clientId);
+  const globalChanged = await syncCommandScope({
+    body,
+    expectedNames: commandNames,
+    logger,
+    rest,
+    route: globalRoute,
+    scope: "global",
+    targetId: null,
+  });
 
   if (config.devGuildId) {
-    const route = Routes.applicationGuildCommands(config.clientId, config.devGuildId);
-    logger?.info(`Fetching currently registered commands for dev guild ${config.devGuildId}`);
-    const current = (await rest.get(route)) as unknown[];
-    logger?.info(
-      `Fetched ${current.length} current command(s) for dev guild ${config.devGuildId}; expected ${body.length}: ${commandNames.join(", ")}`,
-    );
-
-    if (commandsMatch(current, body)) {
-      logger?.info(`Dev guild ${config.devGuildId} commands already match expected definition`);
-      return {
-        body,
-        scope: "guild",
-        targetId: config.devGuildId,
-        changed: false,
-      };
-    }
-
-    logger?.info(`Detected command drift for dev guild ${config.devGuildId}; updating commands`);
-    await rest.put(route, { body });
-    logger?.info(`Finished syncing commands to dev guild ${config.devGuildId}`);
-    return {
+    const guildRoute = Routes.applicationGuildCommands(config.clientId, config.devGuildId);
+    const guildChanged = await syncCommandScope({
       body,
+      expectedNames: commandNames,
+      logger,
+      rest,
+      route: guildRoute,
       scope: "guild",
       targetId: config.devGuildId,
-      changed: true,
-    };
-  }
-
-  const route = Routes.applicationCommands(config.clientId);
-  logger?.info("Fetching currently registered global commands");
-  const current = (await rest.get(route)) as unknown[];
-  logger?.info(`Fetched ${current.length} current global command(s); expected ${body.length}: ${commandNames.join(", ")}`);
-
-  if (commandsMatch(current, body)) {
-    logger?.info("Global commands already match expected definition");
+    });
     return {
       body,
-      scope: "global",
-      targetId: null,
-      changed: false,
+      scope: "both",
+      targetId: config.devGuildId,
+      changed: globalChanged || guildChanged,
     };
   }
-
-  logger?.info("Detected global command drift; updating commands");
-  await rest.put(route, { body });
-  logger?.info("Finished syncing commands globally");
   return {
     body,
     scope: "global",
     targetId: null,
-    changed: true,
+    changed: globalChanged,
   };
 }
 

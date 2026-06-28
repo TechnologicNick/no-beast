@@ -187,7 +187,7 @@ export interface CommandHandlerContext {
 
 export interface CommandSyncResult {
   body: unknown[];
-  scope: "global" | "guild";
+  scope: "global" | "guild" | "both";
   targetId: string | null;
   changed: boolean;
 }

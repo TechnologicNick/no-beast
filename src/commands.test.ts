@@ -1,7 +1,31 @@
 import { describe, expect, mock, test } from "bun:test";
-import { ChannelType } from "discord.js";
+import { ChannelType, type ChatInputCommandInteraction } from "discord.js";
 import { buildCommandRegistrationBody, commandsMatch, handleCommand, syncCommandsIfNeeded } from "./commands.js";
 import type { CommandHandlerContext, GuildSettings } from "./types.js";
+
+type ReplyPayload = {
+  content: string;
+  flags?: unknown;
+};
+
+type InteractionStub = {
+  guildId: string;
+  commandName: string;
+  replied: boolean;
+  deferred: boolean;
+  reply: ReturnType<typeof mock<(payload: ReplyPayload) => Promise<void>>>;
+  followUp: ReturnType<typeof mock<(payload: ReplyPayload) => Promise<void>>>;
+  options: {
+    getSubcommandGroup(optional?: boolean): string | null;
+    getSubcommand(): string;
+    getString(name: string, required?: boolean): string | undefined;
+    getChannel(name: string, required?: boolean): { id: string; type: ChannelType } | undefined;
+    getAttachment(
+      name: string,
+      required?: boolean,
+    ): { name: string; url: string; size: number; contentType: string | null } | undefined;
+  };
+};
 
 function buildSettings(overrides: Partial<GuildSettings> = {}): GuildSettings {
   return {
@@ -23,14 +47,14 @@ function createInteraction(overrides: {
   strings?: Record<string, string>;
   channel?: { id: string; type: ChannelType };
   attachment?: { name: string; url: string; size: number; contentType: string | null };
-}) {
+}): InteractionStub {
   return {
     guildId: "guild-1",
     commandName: "nobeast",
     replied: false,
     deferred: false,
-    reply: mock(async () => undefined),
-    followUp: mock(async () => undefined),
+    reply: mock<(payload: ReplyPayload) => Promise<void>>(async () => undefined),
+    followUp: mock<(payload: ReplyPayload) => Promise<void>>(async () => undefined),
     options: {
       getSubcommandGroup: () => overrides.group ?? null,
       getSubcommand: () => overrides.subcommand,
@@ -38,7 +62,11 @@ function createInteraction(overrides: {
       getChannel: () => overrides.channel,
       getAttachment: () => overrides.attachment,
     },
-  } as never;
+  };
+}
+
+function asInteraction(interaction: InteractionStub): ChatInputCommandInteraction {
+  return interaction as unknown as ChatInputCommandInteraction;
 }
 
 function createContext(replies: string[]): CommandHandlerContext {
@@ -89,19 +117,23 @@ describe("commands", () => {
         id: "123",
         application_id: "456",
         version: "789",
+        name_localizations: null,
+        description_localizations: null,
       },
     ];
 
     expect(commandsMatch(current, expected)).toBe(true);
   });
 
-  test("syncCommandsIfNeeded skips registration when dev-guild commands already match", async () => {
+  test("syncCommandsIfNeeded skips registration when global and dev-guild commands already match", async () => {
     const expected = buildCommandRegistrationBody();
     const get = mock(async () => [
       {
         ...(expected[0] as Record<string, unknown>),
         id: "123",
         application_id: "456",
+        name_localizations: null,
+        description_localizations: null,
       },
     ]);
     const put = mock(async () => undefined);
@@ -118,14 +150,14 @@ describe("commands", () => {
       { get, put },
     );
 
-    expect(result.scope).toBe("guild");
+    expect(result.scope).toBe("both");
     expect(result.targetId).toBe("guild");
     expect(result.changed).toBe(false);
-    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledTimes(2);
     expect(put).not.toHaveBeenCalled();
   });
 
-  test("syncCommandsIfNeeded updates dev-guild commands when they drift", async () => {
+  test("syncCommandsIfNeeded updates global and dev-guild commands when they drift", async () => {
     const get = mock(async () => []);
     const put = mock(async () => undefined);
 
@@ -141,21 +173,22 @@ describe("commands", () => {
       { get, put },
     );
 
-    expect(result.scope).toBe("guild");
+    expect(result.scope).toBe("both");
     expect(result.changed).toBe(true);
-    expect(get).toHaveBeenCalledTimes(1);
-    expect(put).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(put).toHaveBeenCalledTimes(2);
   });
 
   test("rejects custom messages without {serverName}", async () => {
     const replies: string[] = [];
+    const interaction = createInteraction({
+      group: "message",
+      subcommand: "set",
+      strings: { text: "hello" },
+    });
 
     await handleCommand(
-      createInteraction({
-        group: "message",
-        subcommand: "set",
-        strings: { text: "hello" },
-      }),
+      asInteraction(interaction),
       createContext(replies),
     );
 
@@ -167,13 +200,14 @@ describe("commands", () => {
     const setChannel = mock(() => undefined);
     const context = createContext(replies);
     context.settingsStore.setModerationLogChannelId = setChannel;
+    const interaction = createInteraction({
+      group: "logchannel",
+      subcommand: "set",
+      channel: { id: "1", type: ChannelType.GuildVoice },
+    });
 
     await handleCommand(
-      createInteraction({
-        group: "logchannel",
-        subcommand: "set",
-        channel: { id: "1", type: ChannelType.GuildVoice },
-      }),
+      asInteraction(interaction),
       context,
     );
 
@@ -186,13 +220,14 @@ describe("commands", () => {
     const setModerationAction = mock(() => undefined);
     const context = createContext(replies);
     context.settingsStore.setModerationAction = setModerationAction;
+    const interaction = createInteraction({
+      group: "action",
+      subcommand: "set",
+      strings: { mode: "ban" },
+    });
 
     await handleCommand(
-      createInteraction({
-        group: "action",
-        subcommand: "set",
-        strings: { mode: "ban" },
-      }),
+      asInteraction(interaction),
       context,
     );
 
@@ -213,9 +248,9 @@ describe("commands", () => {
     });
     const context = createContext(replies);
 
-    await handleCommand(interaction, context);
+    await handleCommand(asInteraction(interaction), context);
 
     expect(interaction.reply).toHaveBeenCalledTimes(1);
-    expect(interaction.reply.mock.calls[0]?.[0]?.content).toContain("Evaluation for image.png");
+    expect(interaction.reply.mock.calls[0]?.[0].content).toContain("Evaluation for image.png");
   });
 });
