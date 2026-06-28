@@ -15,95 +15,44 @@ function buildSettings(overrides: Partial<GuildSettings> = {}): GuildSettings {
   };
 }
 
-function buildMatch(): AttachmentMatchResult {
-  return {
-    matched: true,
-    stage: "near-duplicate",
-    details: [
-      {
-        stage: "near-duplicate",
-        aspectRatioDelta: 0.01,
-        pHashDistance: 4,
-        dHashDistance: 5,
-        reference: {
-          id: "1",
-          relativePath: "scam/a.jpg",
-          rawSha256: "raw",
-          normalizedSha256: "norm",
-          aspectRatio: 1,
-          pHash: 1n,
-          dHash: 1n,
-          templateVector: new Uint8Array([1, 2, 3]),
-        },
-        templateMae: 5,
-      },
-      {
-        stage: "near-duplicate",
-        aspectRatioDelta: 0.02,
-        pHashDistance: 5,
-        dHashDistance: 4,
-        reference: {
-          id: "2",
-          relativePath: "scam/b.jpg",
-          rawSha256: "raw2",
-          normalizedSha256: "norm2",
-          aspectRatio: 1,
-          pHash: 2n,
-          dHash: 2n,
-          templateVector: new Uint8Array([4, 5, 6]),
-        },
-        templateMae: 6,
-      },
-    ],
-    rawMatches: [],
-    normalizedMatches: [],
-    nearDuplicateCandidates: [
-      {
-        stage: "near-duplicate",
-        aspectRatioDelta: 0.01,
-        pHashDistance: 4,
-        dHashDistance: 5,
-        reference: {
-          id: "1",
-          relativePath: "scam/a.jpg",
-          rawSha256: "raw",
-          normalizedSha256: "norm",
-          aspectRatio: 1,
-          pHash: 1n,
-          dHash: 1n,
-          templateVector: new Uint8Array([1, 2, 3]),
-        },
-        templateMae: 5,
-      },
-      {
-        stage: "near-duplicate",
-        aspectRatioDelta: 0.02,
-        pHashDistance: 5,
-        dHashDistance: 4,
-        reference: {
-          id: "2",
-          relativePath: "scam/b.jpg",
-          rawSha256: "raw2",
-          normalizedSha256: "norm2",
-          aspectRatio: 1,
-          pHash: 2n,
-          dHash: 2n,
-          templateVector: new Uint8Array([4, 5, 6]),
-        },
-        templateMae: 6,
-      },
-    ],
-    templateNearestCandidates: [],
+function buildEvaluation(classification: AttachmentMatchResult["classification"]): AttachmentMatchResult {
+  const detail = {
+    stage: "family-consensus" as const,
+    aspectRatioDelta: 0.01,
+    pHashDistance: 4,
+    dHashDistance: 5,
+    edgeHashDistance: 4,
+    lumaMae: 8,
+    templateMae: 8,
+    memberScore: 14,
+    roiMae: [3, 4, 5, 6],
+    roiVotes: classification === "safe" ? 1 : 3,
+    reference: {
+      id: "1",
+      relativePath: "scam/a.jpg",
+      familyId: "family-a",
+      archetype: "x-post" as const,
+      rawSha256: "raw",
+      aspectRatio: 1,
+      pHash: 1n,
+      dHash: 1n,
+      edgeHash: 1n,
+      lumaGrid: new Uint8Array([1, 2, 3]),
+      roiSignatures: [new Uint8Array([1]), new Uint8Array([2]), new Uint8Array([3]), new Uint8Array([4])],
+    },
   };
-}
 
-function buildNoMatch(): AttachmentMatchResult {
   return {
-    matched: false,
+    classification,
+    stage: classification === "safe" ? null : "family-consensus",
+    details: classification === "safe" ? [] : [detail],
+    matchedFamilyId: classification === "safe" ? null : "family-a",
+    confidence: classification === "safe" ? 0.2 : 0.91,
+    roiVotes: detail.roiVotes,
     rawMatches: [],
-    normalizedMatches: [],
-    nearDuplicateCandidates: [],
-    templateNearestCandidates: [],
+    familyCandidates: [detail],
+    shortlistedFamilies: ["family-a"],
+    archetype: "x-post",
   };
 }
 
@@ -148,13 +97,13 @@ describe("moderateMessage", () => {
   test("dry-run logs all attachments without deleting, DMing, or kicking", async () => {
     const message = buildMessage(2);
     const contexts: ModerationLogContext[] = [];
-    const results = [buildNoMatch(), buildMatch()];
+    const results = [buildEvaluation("safe"), buildEvaluation("scam")];
 
     const result = await moderateMessage(
       message,
       {
         fetchAttachmentBytes: async () => new Uint8Array([1, 2, 3]),
-        matcher: { matchBuffer: async () => results.shift() ?? buildNoMatch() },
+        matcher: { matchBuffer: async () => results.shift() ?? buildEvaluation("safe") },
         settingsStore: { getGuildSettings: () => buildSettings({ dryRun: true }) },
         renderKickMessage: () => ({ content: "test", usedOverride: false }),
         sendModerationLog: async (_channel, context) => {
@@ -171,20 +120,11 @@ describe("moderateMessage", () => {
     expect(message.delete).not.toHaveBeenCalled();
     expect(message.author.send).not.toHaveBeenCalled();
     expect(message.member?.kick).not.toHaveBeenCalled();
-
-    const firstContext = contexts[0];
-    const secondContext = contexts[1];
-    expect(firstContext).toBeDefined();
-    expect(secondContext).toBeDefined();
-    if (!firstContext || !secondContext) {
-      throw new Error("Expected dry-run log contexts");
-    }
-    expect(firstContext.evaluation.matched).toBe(false);
-    expect(firstContext.match).toBeNull();
-    expect(secondContext.evaluation.nearDuplicateCandidates.length).toBe(2);
+    expect(contexts[0]?.evaluation.classification).toBe("safe");
+    expect(contexts[1]?.evaluation.classification).toBe("scam");
   });
 
-  test("enforces on a match and logs outcomes", async () => {
+  test("does not enforce borderline classifications but still logs them", async () => {
     const message = buildMessage();
     let loggedContext: ModerationLogContext | undefined;
 
@@ -192,7 +132,34 @@ describe("moderateMessage", () => {
       message,
       {
         fetchAttachmentBytes: async () => new Uint8Array([1, 2, 3]),
-        matcher: { matchBuffer: async () => buildMatch() },
+        matcher: { matchBuffer: async () => buildEvaluation("borderline") },
+        settingsStore: { getGuildSettings: () => buildSettings() },
+        renderKickMessage: () => ({ content: "test", usedOverride: false }),
+        sendModerationLog: async (_channel, context) => {
+          loggedContext = context;
+        },
+        logger: console,
+      },
+      { send: async () => undefined },
+    );
+
+    expect(result.action).toBe("ignored");
+    expect(message.delete).not.toHaveBeenCalled();
+    expect(message.author.send).not.toHaveBeenCalled();
+    expect(message.member?.kick).not.toHaveBeenCalled();
+    expect(loggedContext?.evaluation.classification).toBe("borderline");
+    expect(loggedContext?.kickAttempted).toBe(false);
+  });
+
+  test("enforces on a scam classification and logs outcomes", async () => {
+    const message = buildMessage();
+    let loggedContext: ModerationLogContext | undefined;
+
+    const result = await moderateMessage(
+      message,
+      {
+        fetchAttachmentBytes: async () => new Uint8Array([1, 2, 3]),
+        matcher: { matchBuffer: async () => buildEvaluation("scam") },
         settingsStore: { getGuildSettings: () => buildSettings() },
         renderKickMessage: () => ({ content: "test", usedOverride: false }),
         sendModerationLog: async (_channel, context) => {
@@ -207,11 +174,7 @@ describe("moderateMessage", () => {
     expect(message.delete).toHaveBeenCalledTimes(1);
     expect(message.author.send).toHaveBeenCalledTimes(1);
     expect(message.member?.kick).toHaveBeenCalledTimes(1);
-    expect(loggedContext).toBeDefined();
-    if (!loggedContext) {
-      throw new Error("Expected moderation log context");
-    }
-    expect(loggedContext.kickSucceeded).toBe(true);
-    expect(loggedContext.deleteRequested).toBe(true);
+    expect(loggedContext?.evaluation.classification).toBe("scam");
+    expect(loggedContext?.kickSucceeded).toBe(true);
   });
 });

@@ -1,6 +1,8 @@
 import type { ChatInputCommandInteraction } from "discord.js";
 
-export type HeuristicStage = "exact-raw" | "exact-normalized" | "near-duplicate" | "template-nearest";
+export type HeuristicStage = "exact-raw" | "family-consensus";
+export type MatchClassification = "safe" | "borderline" | "scam";
+export type Archetype = "x-post" | "withdrawal-proof";
 
 export interface AppConfig {
   discordToken: string;
@@ -20,15 +22,55 @@ export interface GuildSettings {
   updatedAt: string | null;
 }
 
+export interface RoiWindow {
+  x: number;
+  y: number;
+  size: number;
+}
+
 export interface DatasetFingerprint {
   id: string;
   relativePath: string;
+  familyId: string;
+  archetype: Archetype;
   rawSha256: string;
-  normalizedSha256: string;
   aspectRatio: number;
   pHash: bigint;
   dHash: bigint;
-  templateVector: Uint8Array;
+  edgeHash: bigint;
+  lumaGrid: Uint8Array;
+  roiSignatures: Uint8Array[];
+}
+
+export interface ScamFamilyModel {
+  familyId: string;
+  archetype: Archetype;
+  memberIds: string[];
+  roiWindows: RoiWindow[];
+  centroidAspectRatio: number;
+  centroidPHash: bigint;
+  centroidDHash: bigint;
+  centroidEdgeHash: bigint;
+  centroidLumaGrid: Uint8Array;
+  centroidRoiSignatures: Uint8Array[];
+  thresholds: {
+    globalScore: number;
+    borderlineScore: number;
+    memberScore: number;
+    aspectRatioDelta: number;
+    pHashDistance: number;
+    dHashDistance: number;
+    edgeHashDistance: number;
+    lumaMae: number;
+    roiMae: number[];
+    borderlineOnly: boolean;
+  };
+}
+
+export interface ScamDataset {
+  fingerprints: DatasetFingerprint[];
+  familyModels: ScamFamilyModel[];
+  roiWindowsByArchetype: Record<Archetype, RoiWindow[]>;
 }
 
 export interface MatchDetail {
@@ -37,27 +79,29 @@ export interface MatchDetail {
   aspectRatioDelta: number;
   pHashDistance: number;
   dHashDistance: number;
+  edgeHashDistance: number;
+  lumaMae: number;
   templateMae: number;
-}
-
-export interface MatchResult {
-  matched: true;
-  stage: HeuristicStage;
-  details: MatchDetail[];
+  memberScore: number;
+  roiMae: number[];
+  roiVotes: number;
 }
 
 export interface MatchEvaluation {
   rawMatches: MatchDetail[];
-  normalizedMatches: MatchDetail[];
-  nearDuplicateCandidates: MatchDetail[];
-  templateNearestCandidates: MatchDetail[];
+  familyCandidates: MatchDetail[];
+  shortlistedFamilies: string[];
+  archetype: Archetype | null;
 }
 
-export interface NoMatchResult extends MatchEvaluation {
-  matched: false;
+export interface AttachmentMatchResult extends MatchEvaluation {
+  classification: MatchClassification;
+  stage: HeuristicStage | null;
+  details: MatchDetail[];
+  matchedFamilyId: string | null;
+  confidence: number;
+  roiVotes: number;
 }
-
-export type AttachmentMatchResult = (MatchResult & MatchEvaluation) | NoMatchResult;
 
 export interface RenderedKickMessage {
   content: string;
@@ -75,7 +119,7 @@ export interface ModerationLogContext {
   attachmentName: string;
   attachmentUrl: string;
   contentType: string | null;
-  match: MatchResult | null;
+  match: AttachmentMatchResult | null;
   evaluation: AttachmentMatchResult;
   deleteRequested: boolean;
   deleteSucceeded: boolean | null;
@@ -147,10 +191,12 @@ export interface AttachmentCandidate {
 
 export interface NormalizedImageData {
   normalizedBytes: Buffer;
+  grayscale256: Uint8Array;
   aspectRatio: number;
   pHash: bigint;
   dHash: bigint;
-  templateVector: Uint8Array;
+  edgeHash: bigint;
+  lumaGrid: Uint8Array;
 }
 
 export interface MessageLike {

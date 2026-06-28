@@ -2,6 +2,32 @@ import { describe, expect, test } from "bun:test";
 import { formatModerationLog, sendModerationLog, splitModerationLog } from "./moderation-log.js";
 import type { ModerationLogContext } from "./types.js";
 
+const detail = {
+  stage: "family-consensus" as const,
+  aspectRatioDelta: 0.0123,
+  pHashDistance: 4,
+  dHashDistance: 5,
+  edgeHashDistance: 3,
+  lumaMae: 7.25,
+  templateMae: 7.25,
+  memberScore: 15.4,
+  roiMae: [2, 3, 4, 5],
+  roiVotes: 3,
+  reference: {
+    id: "a",
+    relativePath: "scam/test.jpg",
+    familyId: "family-a",
+    archetype: "x-post" as const,
+    rawSha256: "raw",
+    aspectRatio: 1,
+    pHash: 1n,
+    dHash: 2n,
+    edgeHash: 3n,
+    lumaGrid: new Uint8Array([1, 2, 3]),
+    roiSignatures: [new Uint8Array([1]), new Uint8Array([2]), new Uint8Array([3]), new Uint8Array([4])],
+  },
+};
+
 const context: ModerationLogContext = {
   guildName: "Guild",
   dryRun: false,
@@ -14,72 +40,28 @@ const context: ModerationLogContext = {
   attachmentUrl: "https://example.com/image.jpg",
   contentType: "image/jpeg",
   match: {
-    matched: true,
-    stage: "near-duplicate",
-    details: [
-      {
-        stage: "near-duplicate",
-        aspectRatioDelta: 0.0123,
-        pHashDistance: 4,
-        dHashDistance: 5,
-        reference: {
-          id: "a",
-          relativePath: "scam/test.jpg",
-          rawSha256: "raw",
-          normalizedSha256: "norm",
-          aspectRatio: 1,
-          pHash: 1n,
-          dHash: 2n,
-          templateVector: new Uint8Array([1, 2, 3]),
-        },
-        templateMae: 4.25,
-      },
-    ],
+    classification: "scam",
+    stage: "family-consensus",
+    details: [detail],
+    matchedFamilyId: "family-a",
+    confidence: 0.94,
+    roiVotes: 3,
+    rawMatches: [],
+    familyCandidates: [detail],
+    shortlistedFamilies: ["family-a"],
+    archetype: "x-post",
   },
   evaluation: {
-    matched: true,
-    stage: "near-duplicate",
-    details: [
-      {
-        stage: "near-duplicate",
-        aspectRatioDelta: 0.0123,
-        pHashDistance: 4,
-        dHashDistance: 5,
-        reference: {
-          id: "a",
-          relativePath: "scam/test.jpg",
-          rawSha256: "raw",
-          normalizedSha256: "norm",
-          aspectRatio: 1,
-          pHash: 1n,
-          dHash: 2n,
-          templateVector: new Uint8Array([1, 2, 3]),
-        },
-        templateMae: 4.25,
-      },
-    ],
+    classification: "scam",
+    stage: "family-consensus",
+    details: [detail],
+    matchedFamilyId: "family-a",
+    confidence: 0.94,
+    roiVotes: 3,
     rawMatches: [],
-    normalizedMatches: [],
-    nearDuplicateCandidates: [
-      {
-        stage: "near-duplicate",
-        aspectRatioDelta: 0.0123,
-        pHashDistance: 4,
-        dHashDistance: 5,
-        reference: {
-          id: "a",
-          relativePath: "scam/test.jpg",
-          rawSha256: "raw",
-          normalizedSha256: "norm",
-          aspectRatio: 1,
-          pHash: 1n,
-          dHash: 2n,
-          templateVector: new Uint8Array([1, 2, 3]),
-        },
-        templateMae: 4.25,
-      },
-    ],
-    templateNearestCandidates: [],
+    familyCandidates: [detail],
+    shortlistedFamilies: ["family-a"],
+    archetype: "x-post",
   },
   deleteRequested: true,
   deleteSucceeded: true,
@@ -91,16 +73,17 @@ const context: ModerationLogContext = {
 };
 
 describe("formatModerationLog", () => {
-  test("includes heuristic metrics", () => {
+  test("includes classification metrics", () => {
     const message = formatModerationLog({ ...context, dryRun: true });
-    expect(message).toContain("Winning stage");
-    expect(message).toContain("pHashDistance=4");
+    expect(message).toContain("Classification");
+    expect(message).toContain("Matched family");
+    expect(message).toContain("edgeHashDistance=3");
+    expect(message).toContain("roiVotes=3/4");
     expect(message).toContain("scam/test.jpg");
-    expect(message).toContain("Near-duplicate candidates");
     expect(message).toContain("<@1> (**user#0001**, `1`)");
     expect(message).toContain("<#2> (**general**, `2`)");
     expect(message).toContain("Attachment URL: `https://example.com/image.jpg`");
-    expect(message).toContain("✅ Near-duplicate rule");
+    expect(message).toContain("✅ Family consensus rule");
     expect(message).toContain("❌ Exact raw rule");
   });
 
@@ -145,5 +128,18 @@ describe("formatModerationLog", () => {
 
     expect(sent.length).toBeGreaterThan(1);
     expect(sent.every((chunk) => chunk.length <= 2000)).toBe(true);
+  });
+
+  test("does not crash on malformed match detail entries", () => {
+    const message = formatModerationLog({
+      ...context,
+      evaluation: {
+        ...context.evaluation,
+        familyCandidates: [undefined as never, detail],
+      },
+    });
+
+    expect(message).toContain("malformed match detail");
+    expect(message).toContain("scam/test.jpg");
   });
 });

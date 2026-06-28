@@ -41,8 +41,42 @@ function formatRuleStatus(label: string, matched: boolean, detail: string): stri
   return `${matched ? "✅" : "❌"} ${label}: ${detail}`;
 }
 
-function formatDetail(detail: ModerationLogContext["evaluation"]["rawMatches"][number]): string {
-  return `${escapeDiscordText(detail.reference.relativePath)} | stage=${detail.stage} | aspectRatioDelta=${detail.aspectRatioDelta.toFixed(4)} | pHashDistance=${detail.pHashDistance} | dHashDistance=${detail.dHashDistance} | templateMae=${detail.templateMae.toFixed(4)}`;
+function isMatchDetail(
+  detail: unknown,
+): detail is ModerationLogContext["evaluation"]["rawMatches"][number] {
+  if (!detail || typeof detail !== "object") {
+    return false;
+  }
+
+  const candidate = detail as {
+    reference?: { relativePath?: unknown };
+    memberScore?: unknown;
+    aspectRatioDelta?: unknown;
+    pHashDistance?: unknown;
+    dHashDistance?: unknown;
+    edgeHashDistance?: unknown;
+    lumaMae?: unknown;
+    roiVotes?: unknown;
+  };
+
+  return (
+    !!candidate.reference &&
+    typeof candidate.reference.relativePath === "string" &&
+    typeof candidate.memberScore === "number" &&
+    typeof candidate.aspectRatioDelta === "number" &&
+    typeof candidate.pHashDistance === "number" &&
+    typeof candidate.dHashDistance === "number" &&
+    typeof candidate.edgeHashDistance === "number" &&
+    typeof candidate.lumaMae === "number" &&
+    typeof candidate.roiVotes === "number"
+  );
+}
+
+function formatDetail(detail: unknown): string {
+  if (!isMatchDetail(detail)) {
+    return "malformed match detail";
+  }
+  return `${escapeDiscordText(detail.reference.relativePath)} | score=${detail.memberScore.toFixed(2)} | aspectRatioDelta=${detail.aspectRatioDelta.toFixed(4)} | pHashDistance=${detail.pHashDistance} | dHashDistance=${detail.dHashDistance} | edgeHashDistance=${detail.edgeHashDistance} | lumaMae=${detail.lumaMae.toFixed(2)} | roiVotes=${detail.roiVotes}/4`;
 }
 
 export function splitModerationLog(content: string, maxLength = DISCORD_MESSAGE_MAX_LENGTH): string[] {
@@ -86,9 +120,11 @@ export function splitModerationLog(content: string, maxLength = DISCORD_MESSAGE_
 export function formatModerationLog(context: ModerationLogContext): string {
   const title = context.dryRun
     ? context.match
-      ? "Dry-run scam match detected"
+      ? `Dry-run ${context.match.classification} image classification`
       : "Dry-run attachment analysis"
-    : "Scam match enforced";
+    : context.evaluation.classification === "borderline"
+      ? "Borderline image classification"
+      : "Scam match enforced";
   const lines = [
     `**${title}**`,
     formatMetric("Guild", escapeDiscordText(context.guildName)),
@@ -106,38 +142,32 @@ export function formatModerationLog(context: ModerationLogContext): string {
     formatMetric("Kick succeeded", context.kickSucceeded),
     formatMetric("Kick reason", escapeDiscordText(context.kickReason)),
     "",
-    "**Heuristics**",
-    formatMetric("Matched", context.evaluation.matched),
-    formatMetric("Winning stage", context.match?.stage ?? "none"),
+    "**Classification**",
+    formatMetric("Classification", context.evaluation.classification),
+    formatMetric("Winning stage", context.evaluation.stage ?? "none"),
+    formatMetric("Archetype", context.evaluation.archetype ?? "none"),
+    formatMetric("Matched family", context.evaluation.matchedFamilyId ?? "none"),
+    formatMetric("Confidence", context.evaluation.confidence.toFixed(3)),
+    formatMetric("ROI votes", context.evaluation.roiVotes),
     formatMetric("Exact raw matches", context.evaluation.rawMatches.length),
-    formatMetric("Exact normalized matches", context.evaluation.normalizedMatches.length),
-    formatMetric("Near-duplicate candidates", context.evaluation.nearDuplicateCandidates.length),
-    formatMetric("Template-nearest candidates", context.evaluation.templateNearestCandidates.length),
+    formatMetric("Family candidates", context.evaluation.familyCandidates.length),
+    formatMetric("Shortlisted families", context.evaluation.shortlistedFamilies.join(", ") || "none"),
   ];
 
   if (context.dryRun) {
     lines.push(
       "",
       "**Rule Results**",
+      formatRuleStatus("Exact raw rule", context.evaluation.rawMatches.length > 0, `${context.evaluation.rawMatches.length} match(es)`),
       formatRuleStatus(
-        "Exact raw rule",
-        context.evaluation.rawMatches.length > 0,
-        `${context.evaluation.rawMatches.length} match(es)`,
+        "Family consensus rule",
+        context.evaluation.classification === "scam",
+        `${context.evaluation.familyCandidates.length} family candidate(s), ${context.evaluation.roiVotes} ROI vote(s)`,
       ),
       formatRuleStatus(
-        "Exact normalized rule",
-        context.evaluation.normalizedMatches.length > 0,
-        `${context.evaluation.normalizedMatches.length} match(es)`,
-      ),
-      formatRuleStatus(
-        "Near-duplicate rule",
-        context.evaluation.nearDuplicateCandidates.length > 0,
-        `${context.evaluation.nearDuplicateCandidates.length} candidate(s)`,
-      ),
-      formatRuleStatus(
-        "Template-nearest rule",
-        context.evaluation.templateNearestCandidates.length > 0,
-        `${context.evaluation.templateNearestCandidates.length} candidate(s)`,
+        "Borderline rule",
+        context.evaluation.classification === "borderline",
+        `${context.evaluation.familyCandidates.length} family candidate(s)`,
       ),
     );
   }
@@ -146,16 +176,12 @@ export function formatModerationLog(context: ModerationLogContext): string {
     lines.push(formatMetric("Exact raw", formatDetail(detail)));
   }
 
-  for (const detail of context.evaluation.normalizedMatches) {
-    lines.push(formatMetric("Exact normalized", formatDetail(detail)));
+  for (const detail of context.evaluation.familyCandidates) {
+    lines.push(formatMetric("Family candidate", formatDetail(detail)));
   }
 
-  for (const detail of context.evaluation.nearDuplicateCandidates) {
-    lines.push(formatMetric("Near-duplicate candidate", formatDetail(detail)));
-  }
-
-  for (const detail of context.evaluation.templateNearestCandidates) {
-    lines.push(formatMetric("Template-nearest candidate", formatDetail(detail)));
+  for (const detail of context.evaluation.details) {
+    lines.push(formatMetric("Supporting reference", formatDetail(detail)));
   }
 
   return lines.join("\n");

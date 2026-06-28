@@ -2,8 +2,8 @@ import { DEFAULT_DB_PATH } from "./constants.js";
 import type { AppConfig } from "./types.js";
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  const discordToken = env.DISCORD_TOKEN;
-  const clientId = env.CLIENT_ID;
+  const discordToken = env["DISCORD_TOKEN"];
+  const clientId = env["CLIENT_ID"];
 
   if (!discordToken) {
     throw new Error("Missing DISCORD_TOKEN environment variable.");
@@ -16,8 +16,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     discordToken,
     clientId,
-    devGuildId: env.DEV_GUILD_ID,
-    databasePath: env.DATABASE_PATH ?? DEFAULT_DB_PATH,
-    datasetRoot: env.DATASET_ROOT ?? "./datasets",
+    devGuildId: env["DEV_GUILD_ID"],
+    databasePath: env["DATABASE_PATH"] ?? DEFAULT_DB_PATH,
+    datasetRoot: env["DATASET_ROOT"] ?? "./datasets",
   };
 }

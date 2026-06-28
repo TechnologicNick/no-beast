@@ -2,7 +2,7 @@ import { MessageFlags } from "discord.js";
 import { createBot } from "./bot.js";
 import { syncCommandsIfNeeded } from "./commands.js";
 import { loadConfig } from "./config.js";
-import { loadDatasetFingerprints } from "./dataset.js";
+import { loadScamDataset } from "./dataset.js";
 import { openDatabase } from "./database.js";
 import { logger } from "./logger.js";
 import { AttachmentMatcher } from "./matcher.js";
@@ -19,9 +19,9 @@ const database = openDatabase(config.databasePath);
 logger.info("SQLite database opened");
 const settingsStore = new SettingsStore(database);
 logger.info("Loading dataset fingerprints");
-const dataset = await loadDatasetFingerprints(`${config.datasetRoot}/scam`);
-logger.info("Loaded", dataset.length, "dataset fingerprint(s)");
-const matcher = new AttachmentMatcher(dataset);
+const dataset = await loadScamDataset(`${config.datasetRoot}/scam`);
+logger.info("Loaded", dataset.fingerprints.length, "dataset fingerprint(s)");
+const matcher = new AttachmentMatcher(dataset, { useWorkers: true });
 logger.info("Attachment matcher initialized");
 
 async function fetchAttachmentBytes(url: string): Promise<Uint8Array> {

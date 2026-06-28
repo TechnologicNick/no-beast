@@ -2,11 +2,10 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import sharp from "sharp";
-import { loadDatasetFingerprints } from "./dataset.js";
+import { loadScamDataset } from "./dataset.js";
 import { AttachmentMatcher } from "./matcher.js";
-import { createDatasetFingerprint, createTestImage } from "./test-helpers.js";
 
-async function loadAllowedFixtureBuffer(path: string): Promise<Uint8Array> {
+async function loadFixtureBuffer(path: string): Promise<Uint8Array> {
   const bytes = readFileSync(path);
   if (extname(path).toLowerCase() !== ".gif") {
     return bytes;
@@ -23,63 +22,79 @@ function listFixtureFiles(root: string): string[] {
     .filter((path) => statSync(path).isFile());
 }
 
+async function createMatcher(): Promise<AttachmentMatcher> {
+  return new AttachmentMatcher(await loadScamDataset("./datasets/scam"), { useWorkers: false });
+}
+
 describe("AttachmentMatcher", () => {
-  test("matches an exact dataset image", async () => {
-    const image = await createTestImage({ r: 255, g: 0, b: 0 });
-    const entry = await createDatasetFingerprint("1", "scam/red.png", image);
-    const matcher = new AttachmentMatcher([entry]);
+  test("matches an exact dataset image via raw SHA", async () => {
+    const matcher = await createMatcher();
+    const file = listFixtureFiles("./datasets/scam")[0];
+    if (!file) {
+      throw new Error("Expected at least one scam fixture");
+    }
+    const image = await loadFixtureBuffer(file);
 
     const result = await matcher.matchBuffer(image);
-    expect(result.matched).toBe(true);
-    if (result.matched) {
-      expect(result.stage).toBe("exact-raw");
-    }
+    expect(result.classification).toBe("scam");
+    expect(result.stage).toBe("exact-raw");
   });
 
-  test("matches a re-encoded image as exact-normalized or near-duplicate", async () => {
-    const original = await createTestImage({ r: 0, g: 255, b: 0 }, 64, 48);
-    const reencoded = await sharp(original).jpeg({ quality: 85 }).toBuffer();
-    const entryOne = await createDatasetFingerprint("1", "scam/green-a.png", original);
-    const entryTwo = await createDatasetFingerprint("2", "scam/green-b.png", original);
-    const matcher = new AttachmentMatcher([entryOne, entryTwo]);
-
-    const result = await matcher.matchBuffer(reencoded);
-    expect(result.matched).toBe(true);
-  });
-
-  test("does not match unrelated images", async () => {
-    const red = await createTestImage({ r: 255, g: 0, b: 0 });
-    const blue = await createTestImage({ r: 0, g: 0, b: 255 });
-    const entry = await createDatasetFingerprint("1", "scam/red.png", red);
-    const matcher = new AttachmentMatcher([entry]);
-
-    const result = await matcher.matchBuffer(blue);
-    expect(result.matched).toBe(false);
-  });
-
-  test("does not detect allowed dataset images as scams", async () => {
-    const matcher = new AttachmentMatcher(await loadDatasetFingerprints("./datasets/scam"));
-    const files = listFixtureFiles("./datasets/allowed");
-
-    expect(files.length).toBeGreaterThan(0);
+  test("classifies all scam dataset images as scams", async () => {
+    const matcher = await createMatcher();
+    const files = listFixtureFiles("./datasets/scam");
 
     for (const file of files) {
-      const image = await loadAllowedFixtureBuffer(file);
+      const image = await loadFixtureBuffer(file);
       const result = await matcher.matchBuffer(image);
-      expect(result.matched, `expected ${file} not to match the scam dataset`).toBe(false);
+      expect(result.classification, `expected ${file} to classify as scam`).toBe("scam");
     }
   });
 
-  test("detects evaluate dataset images as scams", async () => {
-    const matcher = new AttachmentMatcher(await loadDatasetFingerprints("./datasets/scam"));
+  test("classifies evaluate dataset images as scams", async () => {
+    const matcher = await createMatcher();
     const files = listFixtureFiles("./datasets/evaluate");
 
     expect(files.length).toBeGreaterThan(0);
 
     for (const file of files) {
-      const image = await loadAllowedFixtureBuffer(file);
+      const image = await loadFixtureBuffer(file);
       const result = await matcher.matchBuffer(image);
-      expect(result.matched, `expected ${file} to match the scam dataset`).toBe(true);
+      expect(result.classification, `expected ${file} to classify as scam`).toBe("scam");
     }
+  });
+
+  test("classifies allowed dataset images as safe", async () => {
+    const matcher = await createMatcher();
+    const files = listFixtureFiles("./datasets/allowed");
+
+    expect(files.length).toBeGreaterThan(0);
+
+    for (const file of files) {
+      const image = await loadFixtureBuffer(file);
+      const result = await matcher.matchBuffer(image);
+      expect(result.classification, `expected ${file} not to classify as scam`).toBe("safe");
+    }
+  });
+
+  test("keeps real_darker.jpg safely below borderline", async () => {
+    const matcher = await createMatcher();
+    const image = await loadFixtureBuffer("./datasets/allowed/real_darker.jpg");
+
+    const result = await matcher.matchBuffer(image);
+    expect(result.classification).toBe("safe");
+  });
+
+  test("keeps a re-encoded, darkened, and lightly cropped scam variant classified as scam", async () => {
+    const matcher = await createMatcher();
+    const source = await loadFixtureBuffer("./datasets/scam/hesobia/1.jpg");
+    const variant = await sharp(source)
+      .extract({ left: 16, top: 12, width: 960, height: 1200 })
+      .modulate({ brightness: 0.82 })
+      .jpeg({ quality: 82 })
+      .toBuffer();
+
+    const result = await matcher.matchBuffer(variant);
+    expect(result.classification).toBe("scam");
   });
 });

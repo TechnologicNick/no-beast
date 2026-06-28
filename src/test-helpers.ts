@@ -1,6 +1,15 @@
 import sharp from "sharp";
-import { normalizeImage, normalizedSha256, rawSha256 } from "./image-hash.js";
-import type { DatasetFingerprint } from "./types.js";
+import { extractRoiSignature, normalizeImage, rawSha256 } from "./image-hash.js";
+import type { Archetype, DatasetFingerprint, RoiWindow } from "./types.js";
+
+function getFamilyIdFromPath(relativePath: string): string {
+  const [, familyId] = relativePath.split("/");
+  return familyId ?? "family";
+}
+
+function detectArchetype(aspectRatio: number): Archetype {
+  return aspectRatio < 0.9 ? "x-post" : "withdrawal-proof";
+}
 
 export async function createTestImage(color: { r: number; g: number; b: number }, width = 48, height = 48): Promise<Buffer> {
   return sharp({
@@ -19,16 +28,31 @@ export async function createDatasetFingerprint(
   id: string,
   relativePath: string,
   image: Uint8Array,
+  options?: {
+    familyId?: string;
+    roiWindows?: RoiWindow[];
+  },
 ): Promise<DatasetFingerprint> {
   const normalized = await normalizeImage(image);
+  const archetype = detectArchetype(normalized.aspectRatio);
+  const roiWindows = options?.roiWindows ?? [
+    { x: 0, y: 0, size: 64 },
+    { x: 64, y: 0, size: 64 },
+    { x: 0, y: 64, size: 64 },
+    { x: 64, y: 64, size: 64 },
+  ];
+
   return {
     id,
     relativePath,
+    familyId: options?.familyId ?? getFamilyIdFromPath(relativePath),
+    archetype,
     rawSha256: rawSha256(image),
-    normalizedSha256: normalizedSha256(normalized.normalizedBytes),
     aspectRatio: normalized.aspectRatio,
     pHash: normalized.pHash,
     dHash: normalized.dHash,
-    templateVector: normalized.templateVector,
+    edgeHash: normalized.edgeHash,
+    lumaGrid: normalized.lumaGrid,
+    roiSignatures: roiWindows.map((window) => extractRoiSignature(normalized.grayscale256, window)),
   };
 }

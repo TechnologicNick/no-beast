@@ -1,7 +1,7 @@
 import { MAX_ATTACHMENT_BYTES } from "./constants.js";
 import type {
   AttachmentCandidate,
-  MatchResult,
+  AttachmentMatchResult,
   MessageLike,
   ModerationDependencies,
   ModerationExecutionResult,
@@ -21,7 +21,7 @@ function getChannelName(message: MessageLike): string {
   return message.channel.name ?? message.channel.toString?.() ?? message.channel.id;
 }
 
-function buildKickReason(match: MatchResult): string {
+function buildKickReason(match: AttachmentMatchResult): string {
   return `Matched known scam image dataset entries: ${match.details
     .map((detail) => detail.reference.relativePath)
     .join(", ")}`;
@@ -58,8 +58,9 @@ export async function moderateMessage(
     }
 
     const evaluation = await dependencies.matcher.matchBuffer(bytes);
-    const match = evaluation.matched ? evaluation : null;
-    const kickReason = match ? buildKickReason(match) : "No moderation action taken.";
+    const match = evaluation.classification === "safe" ? null : evaluation;
+    const enforceable = evaluation.classification === "scam";
+    const kickReason = enforceable && match ? buildKickReason(match) : "No moderation action taken.";
     const baseContext: Omit<
       ModerationLogContext,
       "deleteRequested" | "deleteSucceeded" | "dmAttempted" | "dmSucceeded" | "kickAttempted" | "kickSucceeded"
@@ -80,7 +81,7 @@ export async function moderateMessage(
     };
 
     if (settings.dryRun) {
-      dryRunMatched ||= evaluation.matched;
+      dryRunMatched ||= enforceable;
       await dependencies.sendModerationLog(logChannel, {
         ...baseContext,
         deleteRequested: false,
@@ -93,7 +94,20 @@ export async function moderateMessage(
       continue;
     }
 
-    if (!match) {
+    if (evaluation.classification === "borderline") {
+      await dependencies.sendModerationLog(logChannel, {
+        ...baseContext,
+        deleteRequested: false,
+        deleteSucceeded: null,
+        dmAttempted: false,
+        dmSucceeded: null,
+        kickAttempted: false,
+        kickSucceeded: null,
+      });
+      continue;
+    }
+
+    if (!enforceable) {
       continue;
     }
 
