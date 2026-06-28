@@ -1,0 +1,10 @@
+services:
+  no-beast:
+    build: .
+    container_name: no-beast
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./datasets:/app/datasets
