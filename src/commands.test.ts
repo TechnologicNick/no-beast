@@ -125,6 +125,15 @@ describe("commands", () => {
     expect(commandsMatch(current, expected)).toBe(true);
   });
 
+  test("matches equivalent command payloads when Discord returns contexts instead of dm_permission", () => {
+    const expected = buildCommandRegistrationBody();
+    const currentCommand = { ...(expected[0] as Record<string, unknown>) };
+    delete currentCommand["dm_permission"];
+    currentCommand["contexts"] = [0, 1, 2];
+
+    expect(commandsMatch([currentCommand], expected)).toBe(true);
+  });
+
   test("syncCommandsIfNeeded skips registration when global and dev-guild commands already match", async () => {
     const expected = buildCommandRegistrationBody();
     const get = mock(async () => [

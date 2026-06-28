@@ -185,6 +185,7 @@ const COMMAND_FIELDS_TO_STRIP = new Set([
   "guild_id",
   "integration_types",
   "contexts",
+  "dm_permission",
   "nsfw",
   "name_localizations",
   "description_localizations",
