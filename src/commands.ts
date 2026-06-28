@@ -67,7 +67,6 @@ export function buildCommands() {
     .setName(COMMAND_NAME)
     .setDescription("Manage no-beast scam detection settings.")
     .setContexts([InteractionContextType.Guild])
-    .setDefaultMemberPermissions(PermissionFlagsBits.MuteMembers)
     .addSubcommand((subcommand) =>
       subcommand.setName("status").setDescription("Show current moderation settings."),
     )
