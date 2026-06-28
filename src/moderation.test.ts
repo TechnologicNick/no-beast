@@ -7,6 +7,7 @@ function buildSettings(overrides: Partial<GuildSettings> = {}): GuildSettings {
     guildId: "guild-1",
     scannerEnabled: true,
     dryRun: false,
+    moderationAction: "timeout-24h",
     kickMessageOverride: null,
     rejoinInviteUrl: null,
     moderationLogChannelId: "log-1",
@@ -88,13 +89,23 @@ function buildMessage(attachmentCount = 1): MessageLike {
     attachments,
     member: {
       kick: mock(async () => undefined),
+      ban: mock(async () => undefined),
+      timeout: mock(async () => undefined),
+      roles: {
+        cache: {
+          values: function* () {
+            yield { id: "role-1", name: "Member" };
+            yield { id: "role-2", name: "Muted" };
+          },
+        },
+      },
     },
     delete: mock(async () => undefined),
   };
 }
 
 describe("moderateMessage", () => {
-  test("dry-run logs all attachments without deleting, DMing, or kicking", async () => {
+  test("dry-run logs only the first enforceable attachment and stops", async () => {
     const message = buildMessage(2);
     const contexts: ModerationLogContext[] = [];
     const results = [buildEvaluation("safe"), buildEvaluation("scam")];
@@ -116,12 +127,11 @@ describe("moderateMessage", () => {
 
     expect(result.action).toBe("dry-run");
     expect(result.matched).toBe(true);
-    expect(contexts).toHaveLength(2);
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]?.includeDebugDetails).toBe(false);
     expect(message.delete).not.toHaveBeenCalled();
     expect(message.author.send).not.toHaveBeenCalled();
-    expect(message.member?.kick).not.toHaveBeenCalled();
-    expect(contexts[0]?.evaluation.classification).toBe("safe");
-    expect(contexts[1]?.evaluation.classification).toBe("scam");
+    expect(message.member?.timeout).not.toHaveBeenCalled();
   });
 
   test("does not enforce borderline classifications but still logs them", async () => {
@@ -148,10 +158,10 @@ describe("moderateMessage", () => {
     expect(message.author.send).not.toHaveBeenCalled();
     expect(message.member?.kick).not.toHaveBeenCalled();
     expect(loggedContext?.evaluation.classification).toBe("borderline");
-    expect(loggedContext?.kickAttempted).toBe(false);
+    expect(loggedContext?.enforcementAttempted).toBe(false);
   });
 
-  test("enforces on a scam classification and logs outcomes", async () => {
+  test("applies a timeout by default and logs role snapshot", async () => {
     const message = buildMessage();
     let loggedContext: ModerationLogContext | undefined;
 
@@ -173,8 +183,30 @@ describe("moderateMessage", () => {
     expect(result.action).toBe("enforced");
     expect(message.delete).toHaveBeenCalledTimes(1);
     expect(message.author.send).toHaveBeenCalledTimes(1);
-    expect(message.member?.kick).toHaveBeenCalledTimes(1);
-    expect(loggedContext?.evaluation.classification).toBe("scam");
-    expect(loggedContext?.kickSucceeded).toBe(true);
+    expect(message.member?.timeout).toHaveBeenCalledTimes(1);
+    expect(message.member?.kick).not.toHaveBeenCalled();
+    expect(loggedContext?.moderationAction).toBe("timeout-24h");
+    expect(loggedContext?.memberRoleSnapshot).toContain("Member (role-1)");
+  });
+
+  test("supports ban enforcement", async () => {
+    const message = buildMessage();
+
+    const result = await moderateMessage(
+      message,
+      {
+        fetchAttachmentBytes: async () => new Uint8Array([1, 2, 3]),
+        matcher: { matchBuffer: async () => buildEvaluation("scam") },
+        settingsStore: { getGuildSettings: () => buildSettings({ moderationAction: "ban" }) },
+        renderKickMessage: () => ({ content: "test", usedOverride: false }),
+        sendModerationLog: async () => undefined,
+        logger: console,
+      },
+      { send: async () => undefined },
+    );
+
+    expect(result.action).toBe("enforced");
+    expect(message.member?.ban).toHaveBeenCalledTimes(1);
+    expect(message.member?.timeout).not.toHaveBeenCalled();
   });
 });

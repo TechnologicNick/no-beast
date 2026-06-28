@@ -1,4 +1,4 @@
-import type { LogChannelLike, ModerationLogContext } from "./types.js";
+import type { AttachmentMatchResult, LogChannelLike, ModerationLogContext } from "./types.js";
 
 const DISCORD_MESSAGE_MAX_LENGTH = 2000;
 
@@ -39,6 +39,10 @@ function formatChannelReference(channelId: string, channelName: string): string 
 
 function formatRuleStatus(label: string, matched: boolean, detail: string): string {
   return `${matched ? "✅" : "❌"} ${label}: ${detail}`;
+}
+
+function formatRoleList(roles: string[]): string {
+  return roles.length > 0 ? roles.map((role) => escapeDiscordText(role)).join(", ") : "none";
 }
 
 function isMatchDetail(
@@ -117,11 +121,51 @@ export function splitModerationLog(content: string, maxLength = DISCORD_MESSAGE_
   return chunks;
 }
 
+export function formatEvaluationReport(evaluation: AttachmentMatchResult): string {
+  const lines = [
+    "**Classification**",
+    formatMetric("Classification", evaluation.classification),
+    formatMetric("Winning stage", evaluation.stage ?? "none"),
+    formatMetric("Archetype", evaluation.archetype ?? "none"),
+    formatMetric("Matched family", evaluation.matchedFamilyId ?? "none"),
+    formatMetric("Confidence", evaluation.confidence.toFixed(3)),
+    formatMetric("ROI votes", evaluation.roiVotes),
+    formatMetric("Exact raw matches", evaluation.rawMatches.length),
+    formatMetric("Family candidates", evaluation.familyCandidates.length),
+    formatMetric("Shortlisted families", evaluation.shortlistedFamilies.join(", ") || "none"),
+    "",
+    "**Rule Results**",
+    formatRuleStatus("Exact raw rule", evaluation.rawMatches.length > 0, `${evaluation.rawMatches.length} match(es)`),
+    formatRuleStatus(
+      "Family consensus rule",
+      evaluation.classification === "scam",
+      `${evaluation.familyCandidates.length} family candidate(s), ${evaluation.roiVotes} ROI vote(s)`,
+    ),
+    formatRuleStatus(
+      "Borderline rule",
+      evaluation.classification === "borderline",
+      `${evaluation.familyCandidates.length} family candidate(s)`,
+    ),
+  ];
+
+  for (const detail of evaluation.rawMatches) {
+    lines.push(formatMetric("Exact raw", formatDetail(detail)));
+  }
+
+  for (const detail of evaluation.familyCandidates) {
+    lines.push(formatMetric("Family candidate", formatDetail(detail)));
+  }
+
+  for (const detail of evaluation.details) {
+    lines.push(formatMetric("Supporting reference", formatDetail(detail)));
+  }
+
+  return lines.join("\n");
+}
+
 export function formatModerationLog(context: ModerationLogContext): string {
   const title = context.dryRun
-    ? context.match
-      ? `Dry-run ${context.match.classification} image classification`
-      : "Dry-run attachment analysis"
+    ? "Dry-run enforcement would have triggered"
     : context.evaluation.classification === "borderline"
       ? "Borderline image classification"
       : "Scam match enforced";
@@ -134,56 +178,24 @@ export function formatModerationLog(context: ModerationLogContext): string {
     formatMetric("Attachment", `${escapeDiscordText(context.attachmentName)} (${escapeDiscordText(context.contentType ?? "unknown")})`),
     formatMetric("Attachment URL", formatInlineCode(context.attachmentUrl)),
     formatMetric("Dry run", context.dryRun),
+    formatMetric("Moderation action", context.moderationAction),
     formatMetric("Delete requested", context.deleteRequested),
     formatMetric("Delete succeeded", context.deleteSucceeded),
     formatMetric("DM attempted", context.dmAttempted),
     formatMetric("DM succeeded", context.dmSucceeded),
-    formatMetric("Kick attempted", context.kickAttempted),
-    formatMetric("Kick succeeded", context.kickSucceeded),
-    formatMetric("Kick reason", escapeDiscordText(context.kickReason)),
-    "",
-    "**Classification**",
-    formatMetric("Classification", context.evaluation.classification),
-    formatMetric("Winning stage", context.evaluation.stage ?? "none"),
-    formatMetric("Archetype", context.evaluation.archetype ?? "none"),
-    formatMetric("Matched family", context.evaluation.matchedFamilyId ?? "none"),
-    formatMetric("Confidence", context.evaluation.confidence.toFixed(3)),
-    formatMetric("ROI votes", context.evaluation.roiVotes),
-    formatMetric("Exact raw matches", context.evaluation.rawMatches.length),
-    formatMetric("Family candidates", context.evaluation.familyCandidates.length),
-    formatMetric("Shortlisted families", context.evaluation.shortlistedFamilies.join(", ") || "none"),
+    formatMetric("Enforcement attempted", context.enforcementAttempted),
+    formatMetric("Enforcement succeeded", context.enforcementSucceeded),
+    formatMetric("Enforcement reason", escapeDiscordText(context.enforcementReason)),
+    formatMetric("Member roles at action time", formatRoleList(context.memberRoleSnapshot)),
   ];
 
-  if (context.dryRun) {
-    lines.push(
-      "",
-      "**Rule Results**",
-      formatRuleStatus("Exact raw rule", context.evaluation.rawMatches.length > 0, `${context.evaluation.rawMatches.length} match(es)`),
-      formatRuleStatus(
-        "Family consensus rule",
-        context.evaluation.classification === "scam",
-        `${context.evaluation.familyCandidates.length} family candidate(s), ${context.evaluation.roiVotes} ROI vote(s)`,
-      ),
-      formatRuleStatus(
-        "Borderline rule",
-        context.evaluation.classification === "borderline",
-        `${context.evaluation.familyCandidates.length} family candidate(s)`,
-      ),
-    );
+  if (!context.includeDebugDetails) {
+    lines.push("", formatMetric("Classification", context.evaluation.classification));
+    lines.push(formatMetric("Matched family", context.evaluation.matchedFamilyId ?? "none"));
+    return lines.join("\n");
   }
 
-  for (const detail of context.evaluation.rawMatches) {
-    lines.push(formatMetric("Exact raw", formatDetail(detail)));
-  }
-
-  for (const detail of context.evaluation.familyCandidates) {
-    lines.push(formatMetric("Family candidate", formatDetail(detail)));
-  }
-
-  for (const detail of context.evaluation.details) {
-    lines.push(formatMetric("Supporting reference", formatDetail(detail)));
-  }
-
+  lines.push("", formatEvaluationReport(context.evaluation));
   return lines.join("\n");
 }
 

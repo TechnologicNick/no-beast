@@ -1,23 +1,57 @@
 import {
   ChannelType,
+  MessageFlags,
   PermissionFlagsBits,
   REST,
   Routes,
   SlashCommandBuilder,
+  type Attachment,
   type ChatInputCommandInteraction,
   type Client,
   type GuildTextBasedChannel,
 } from "discord.js";
-import { COMMAND_NAME, MAX_CUSTOM_MESSAGE_LENGTH } from "./constants.js";
+import { COMMAND_NAME, MAX_ATTACHMENT_BYTES, MAX_CUSTOM_MESSAGE_LENGTH } from "./constants.js";
+import { formatEvaluationReport, splitModerationLog } from "./moderation-log.js";
 import type {
   AppConfig,
   CommandHandlerContext,
   CommandSyncResult,
   LoggerLike,
+  ModerationAction,
 } from "./types.js";
 
 function isDiscordInviteUrl(value: string): boolean {
   return /^https:\/\/(discord\.gg|discord\.com\/invite)\/[\w-]+$/i.test(value);
+}
+
+function parseModerationAction(value: string): ModerationAction | null {
+  return value === "timeout-24h" || value === "kick" || value === "ban" ? value : null;
+}
+
+async function replyInChunks(interaction: ChatInputCommandInteraction, content: string): Promise<void> {
+  const chunks = splitModerationLog(content, 1900);
+  if (chunks.length === 0) {
+    return;
+  }
+  const [first, ...rest] = chunks;
+  if (!interaction.replied && !interaction.deferred) {
+    await interaction.reply({ content: first, flags: MessageFlags.Ephemeral });
+  } else {
+    await interaction.followUp({ content: first, flags: MessageFlags.Ephemeral });
+  }
+  for (const chunk of rest) {
+    await interaction.followUp({ content: chunk, flags: MessageFlags.Ephemeral });
+  }
+}
+
+function validateEvaluationAttachment(attachment: Attachment): string | null {
+  if (!attachment.contentType?.startsWith("image/")) {
+    return "The attachment must be an image.";
+  }
+  if (attachment.size <= 0 || attachment.size > MAX_ATTACHMENT_BYTES) {
+    return `The attachment must be between 1 byte and ${MAX_ATTACHMENT_BYTES} bytes.`;
+  }
+  return null;
 }
 
 export function buildCommands() {
@@ -35,6 +69,14 @@ export function buildCommands() {
     .addSubcommand((subcommand) =>
       subcommand.setName("disable").setDescription("Disable scam image scanning."),
     )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName("evaluate")
+        .setDescription("Evaluate an image attachment without taking action.")
+        .addAttachmentOption((option) =>
+          option.setName("image").setDescription("Image attachment to evaluate.").setRequired(true),
+        ),
+    )
     .addSubcommandGroup((group) =>
       group
         .setName("dryrun")
@@ -42,6 +84,28 @@ export function buildCommands() {
         .addSubcommand((subcommand) => subcommand.setName("view").setDescription("Show dry-run status."))
         .addSubcommand((subcommand) => subcommand.setName("enable").setDescription("Enable dry-run mode."))
         .addSubcommand((subcommand) => subcommand.setName("disable").setDescription("Disable dry-run mode.")),
+    )
+    .addSubcommandGroup((group) =>
+      group
+        .setName("action")
+        .setDescription("Manage the enforcement action for scam detections.")
+        .addSubcommand((subcommand) => subcommand.setName("view").setDescription("View the current action."))
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName("set")
+            .setDescription("Set the enforcement action.")
+            .addStringOption((option) =>
+              option
+                .setName("mode")
+                .setDescription("What to do when a scam is detected.")
+                .setRequired(true)
+                .addChoices(
+                  { name: "24 hour timeout", value: "timeout-24h" },
+                  { name: "kick", value: "kick" },
+                  { name: "ban", value: "ban" },
+                ),
+            ),
+        ),
     )
     .addSubcommandGroup((group) =>
       group
@@ -230,6 +294,7 @@ export async function handleCommand(
       [
         `Scanner enabled: ${settings.scannerEnabled}`,
         `Dry run: ${settings.dryRun}`,
+        `Moderation action: ${settings.moderationAction}`,
         `Log channel: ${settings.moderationLogChannelId ? `<#${settings.moderationLogChannelId}>` : "not set"}`,
         `Invite URL: ${settings.rejoinInviteUrl ?? "not set"}`,
         `Custom message: ${settings.kickMessageOverride ? "set" : "default"}`,
@@ -245,6 +310,28 @@ export async function handleCommand(
     return;
   }
 
+  if (!group && subcommand === "evaluate") {
+    const attachment = interaction.options.getAttachment("image", true);
+    const validationError = validateEvaluationAttachment(attachment);
+    if (validationError) {
+      await respond(validationError);
+      return;
+    }
+
+    try {
+      const bytes = await context.fetchAttachmentBytes(attachment.url);
+      const evaluation = await context.matcher.matchBuffer(bytes);
+      await replyInChunks(
+        interaction,
+        `**Evaluation for ${attachment.name}**\n${formatEvaluationReport(evaluation)}`,
+      );
+    } catch (error) {
+      context.logger.error(`Failed to evaluate attachment ${attachment.url}: ${String(error)}`);
+      await respond("Failed to evaluate the attachment.");
+    }
+    return;
+  }
+
   if (group === "dryrun") {
     if (subcommand === "view") {
       await respond(`Dry run is ${settings.dryRun ? "enabled" : "disabled"}.`);
@@ -253,6 +340,22 @@ export async function handleCommand(
     const enabled = subcommand === "enable";
     context.settingsStore.setDryRun(guildId, enabled);
     await respond(`Dry run ${enabled ? "enabled" : "disabled"}.`);
+    return;
+  }
+
+  if (group === "action") {
+    if (subcommand === "view") {
+      await respond(`Moderation action is ${settings.moderationAction}.`);
+      return;
+    }
+    const selected = interaction.options.getString("mode", true);
+    const action = parseModerationAction(selected);
+    if (!action) {
+      await respond("Unsupported moderation action.");
+      return;
+    }
+    context.settingsStore.setModerationAction(guildId, action);
+    await respond(`Moderation action updated to ${action}.`);
     return;
   }
 

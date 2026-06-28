@@ -54,6 +54,8 @@ createBot(config, {
   logger,
   commandContext: {
     settingsStore,
+    matcher,
+    fetchAttachmentBytes,
     reply: async (interaction, content) => {
       if (interaction.replied || interaction.deferred) {
         await interaction.followUp({ content, flags: MessageFlags.Ephemeral });

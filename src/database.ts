@@ -10,11 +10,17 @@ export function openDatabase(path: string): Database {
       guild_id TEXT PRIMARY KEY,
       scanner_enabled INTEGER NOT NULL DEFAULT 1,
       dry_run INTEGER NOT NULL DEFAULT 0,
+      moderation_action TEXT NOT NULL DEFAULT 'timeout-24h',
       kick_message_override TEXT NULL,
       rejoin_invite_url TEXT NULL,
       moderation_log_channel_id TEXT NULL,
       updated_at TEXT NOT NULL
     );
   `);
+  try {
+    db.exec("ALTER TABLE guild_settings ADD COLUMN moderation_action TEXT NOT NULL DEFAULT 'timeout-24h';");
+  } catch {
+    // Column already exists.
+  }
   return db;
 }

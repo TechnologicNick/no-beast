@@ -28,7 +28,9 @@ export function createBot(
         PermissionsBitField.Flags.ViewChannel,
         PermissionsBitField.Flags.SendMessages,
         PermissionsBitField.Flags.ManageMessages,
+        PermissionsBitField.Flags.ModerateMembers,
         PermissionsBitField.Flags.KickMembers,
+        PermissionsBitField.Flags.BanMembers,
       ]),
     });
     dependencies.logger.info(`Invite URL: ${inviteUrl}`);

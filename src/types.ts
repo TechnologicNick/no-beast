@@ -3,6 +3,7 @@ import type { ChatInputCommandInteraction } from "discord.js";
 export type HeuristicStage = "exact-raw" | "family-consensus";
 export type MatchClassification = "safe" | "borderline" | "scam";
 export type Archetype = "x-post" | "withdrawal-proof";
+export type ModerationAction = "timeout-24h" | "kick" | "ban";
 
 export interface AppConfig {
   discordToken: string;
@@ -16,6 +17,7 @@ export interface GuildSettings {
   guildId: string;
   scannerEnabled: boolean;
   dryRun: boolean;
+  moderationAction: ModerationAction;
   kickMessageOverride: string | null;
   rejoinInviteUrl: string | null;
   moderationLogChannelId: string | null;
@@ -111,8 +113,11 @@ export interface RenderedKickMessage {
 export interface ModerationLogContext {
   guildName: string;
   dryRun: boolean;
+  includeDebugDetails: boolean;
   memberTag: string;
   userId: string;
+  moderationAction: ModerationAction;
+  memberRoleSnapshot: string[];
   sourceChannelId: string;
   sourceChannelName: string;
   messageId: string;
@@ -125,9 +130,9 @@ export interface ModerationLogContext {
   deleteSucceeded: boolean | null;
   dmAttempted: boolean;
   dmSucceeded: boolean | null;
-  kickAttempted: boolean;
-  kickSucceeded: boolean | null;
-  kickReason: string;
+  enforcementAttempted: boolean;
+  enforcementSucceeded: boolean | null;
+  enforcementReason: string;
 }
 
 export interface LogChannelLike {
@@ -159,7 +164,7 @@ export interface ModerationDependencies {
 
 export interface ModerationExecutionResult {
   matched: boolean;
-  action: "ignored" | "dry-run" | "enforced" | "kick-failed";
+  action: "ignored" | "dry-run" | "enforced" | "enforcement-failed";
 }
 
 export interface CommandHandlerContext {
@@ -167,12 +172,17 @@ export interface CommandHandlerContext {
     getGuildSettings(guildId: string): GuildSettings;
     setScannerEnabled(guildId: string, enabled: boolean): void;
     setDryRun(guildId: string, dryRun: boolean): void;
+    setModerationAction(guildId: string, action: ModerationAction): void;
     setKickMessageOverride(guildId: string, message: string | null): void;
     setRejoinInviteUrl(guildId: string, inviteUrl: string | null): void;
     setModerationLogChannelId(guildId: string, channelId: string | null): void;
   };
+  matcher: {
+    matchBuffer(buffer: Uint8Array): Promise<AttachmentMatchResult>;
+  };
+  fetchAttachmentBytes(url: string): Promise<Uint8Array>;
   reply(interaction: ChatInputCommandInteraction, content: string): Promise<void>;
-  logger: Pick<LoggerLike, "warn">;
+  logger: Pick<LoggerLike, "warn" | "error">;
 }
 
 export interface CommandSyncResult {
@@ -223,6 +233,16 @@ export interface MessageLike {
   };
   member: {
     kick(reason?: string): Promise<unknown>;
+    ban(options?: { reason?: string; deleteMessageSeconds?: number }): Promise<unknown>;
+    timeout(milliseconds: number | null, reason?: string): Promise<unknown>;
+    roles: {
+      cache: {
+        values(): IterableIterator<{
+          id: string;
+          name: string;
+        }>;
+      };
+    };
   } | null;
   delete(): Promise<unknown>;
 }

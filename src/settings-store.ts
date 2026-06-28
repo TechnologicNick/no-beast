@@ -1,14 +1,19 @@
 import type { Database } from "bun:sqlite";
-import type { GuildSettings } from "./types.js";
+import type { GuildSettings, ModerationAction } from "./types.js";
 
 interface SettingsRow {
   guild_id: string;
   scanner_enabled: number;
   dry_run: number;
+  moderation_action: string;
   kick_message_override: string | null;
   rejoin_invite_url: string | null;
   moderation_log_channel_id: string | null;
   updated_at: string;
+}
+
+function parseModerationAction(value: string | null | undefined): ModerationAction {
+  return value === "kick" || value === "ban" || value === "timeout-24h" ? value : "timeout-24h";
 }
 
 export class SettingsStore {
@@ -28,6 +33,7 @@ export class SettingsStore {
         guildId,
         scannerEnabled: true,
         dryRun: false,
+        moderationAction: "timeout-24h",
         kickMessageOverride: null,
         rejoinInviteUrl: null,
         moderationLogChannelId: null,
@@ -39,6 +45,7 @@ export class SettingsStore {
       guildId: row.guild_id,
       scannerEnabled: row.scanner_enabled === 1,
       dryRun: row.dry_run === 1,
+      moderationAction: parseModerationAction(row.moderation_action),
       kickMessageOverride: row.kick_message_override,
       rejoinInviteUrl: row.rejoin_invite_url,
       moderationLogChannelId: row.moderation_log_channel_id,
@@ -52,6 +59,10 @@ export class SettingsStore {
 
   public setDryRun(guildId: string, dryRun: boolean): void {
     this.upsert(guildId, { dryRun });
+  }
+
+  public setModerationAction(guildId: string, action: ModerationAction): void {
+    this.upsert(guildId, { moderationAction: action });
   }
 
   public setKickMessageOverride(guildId: string, message: string | null): void {
@@ -71,7 +82,7 @@ export class SettingsStore {
     updates: Partial<
       Pick<
         GuildSettings,
-        "scannerEnabled" | "dryRun" | "kickMessageOverride" | "rejoinInviteUrl" | "moderationLogChannelId"
+        "scannerEnabled" | "dryRun" | "moderationAction" | "kickMessageOverride" | "rejoinInviteUrl" | "moderationLogChannelId"
       >
     >,
   ): void {
@@ -80,6 +91,7 @@ export class SettingsStore {
       guildId,
       scannerEnabled: updates.scannerEnabled ?? current.scannerEnabled,
       dryRun: updates.dryRun ?? current.dryRun,
+      moderationAction: updates.moderationAction ?? current.moderationAction,
       kickMessageOverride:
         updates.kickMessageOverride === undefined
           ? current.kickMessageOverride
@@ -99,14 +111,16 @@ export class SettingsStore {
           guild_id,
           scanner_enabled,
           dry_run,
+          moderation_action,
           kick_message_override,
           rejoin_invite_url,
           moderation_log_channel_id,
           updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
         ON CONFLICT(guild_id) DO UPDATE SET
           scanner_enabled = excluded.scanner_enabled,
           dry_run = excluded.dry_run,
+          moderation_action = excluded.moderation_action,
           kick_message_override = excluded.kick_message_override,
           rejoin_invite_url = excluded.rejoin_invite_url,
           moderation_log_channel_id = excluded.moderation_log_channel_id,
@@ -116,6 +130,7 @@ export class SettingsStore {
         next.guildId,
         next.scannerEnabled ? 1 : 0,
         next.dryRun ? 1 : 0,
+        next.moderationAction,
         next.kickMessageOverride,
         next.rejoinInviteUrl,
         next.moderationLogChannelId,

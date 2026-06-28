@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatModerationLog, sendModerationLog, splitModerationLog } from "./moderation-log.js";
+import { formatEvaluationReport, formatModerationLog, sendModerationLog, splitModerationLog } from "./moderation-log.js";
 import type { ModerationLogContext } from "./types.js";
 
 const detail = {
@@ -28,75 +28,81 @@ const detail = {
   },
 };
 
+const evaluation = {
+  classification: "scam" as const,
+  stage: "family-consensus" as const,
+  details: [detail],
+  matchedFamilyId: "family-a",
+  confidence: 0.94,
+  roiVotes: 3,
+  rawMatches: [] as typeof detail[],
+  familyCandidates: [detail],
+  shortlistedFamilies: ["family-a"],
+  archetype: "x-post" as const,
+};
+
 const context: ModerationLogContext = {
   guildName: "Guild",
   dryRun: false,
+  includeDebugDetails: true,
   memberTag: "user#0001",
   userId: "1",
+  moderationAction: "kick",
+  memberRoleSnapshot: ["Member (1)", "Muted (2)"],
   sourceChannelId: "2",
   sourceChannelName: "general",
   messageId: "3",
   attachmentName: "image.jpg",
   attachmentUrl: "https://example.com/image.jpg",
   contentType: "image/jpeg",
-  match: {
-    classification: "scam",
-    stage: "family-consensus",
-    details: [detail],
-    matchedFamilyId: "family-a",
-    confidence: 0.94,
-    roiVotes: 3,
-    rawMatches: [],
-    familyCandidates: [detail],
-    shortlistedFamilies: ["family-a"],
-    archetype: "x-post",
-  },
-  evaluation: {
-    classification: "scam",
-    stage: "family-consensus",
-    details: [detail],
-    matchedFamilyId: "family-a",
-    confidence: 0.94,
-    roiVotes: 3,
-    rawMatches: [],
-    familyCandidates: [detail],
-    shortlistedFamilies: ["family-a"],
-    archetype: "x-post",
-  },
+  match: evaluation,
+  evaluation,
   deleteRequested: true,
   deleteSucceeded: true,
   dmAttempted: true,
   dmSucceeded: true,
-  kickAttempted: true,
-  kickSucceeded: true,
-  kickReason: "reason",
+  enforcementAttempted: true,
+  enforcementSucceeded: true,
+  enforcementReason: "reason",
 };
 
 describe("formatModerationLog", () => {
   test("includes classification metrics", () => {
-    const message = formatModerationLog({ ...context, dryRun: true });
+    const message = formatModerationLog(context);
     expect(message).toContain("Classification");
     expect(message).toContain("Matched family");
     expect(message).toContain("edgeHashDistance=3");
     expect(message).toContain("roiVotes=3/4");
     expect(message).toContain("scam/test.jpg");
-    expect(message).toContain("<@1> (**user#0001**, `1`)");
-    expect(message).toContain("<#2> (**general**, `2`)");
-    expect(message).toContain("Attachment URL: `https://example.com/image.jpg`");
-    expect(message).toContain("✅ Family consensus rule");
-    expect(message).toContain("❌ Exact raw rule");
+    expect(message).toContain("Member roles at action time");
+    expect(message).toContain("Enforcement attempted");
+  });
+
+  test("formats evaluation reports", () => {
+    const message = formatEvaluationReport(evaluation);
+    expect(message).toContain("Rule Results");
+    expect(message).toContain("Family consensus rule");
+  });
+
+  test("uses summary logs for dry-run mode", () => {
+    const message = formatModerationLog({
+      ...context,
+      dryRun: true,
+      includeDebugDetails: false,
+    });
+    expect(message).toContain("Dry-run enforcement would have triggered");
+    expect(message).not.toContain("Rule Results");
   });
 
   test("escapes user-controlled text", () => {
     const message = formatModerationLog({
       ...context,
-      dryRun: true,
       guildName: "@everyone *Guild*",
       memberTag: "user_*`name`",
       sourceChannelName: "chan_[x]",
       attachmentName: "file_[x].png",
       attachmentUrl: "https://example.com/a`b`",
-      kickReason: "@here *(reason)*",
+      enforcementReason: "@here *(reason)*",
     });
 
     expect(message).toContain("Guild: @​everyone \\*Guild\\*");
@@ -104,7 +110,7 @@ describe("formatModerationLog", () => {
     expect(message).toContain("<#2> (**chan\\_\\[x\\]**, `2`)");
     expect(message).toContain("Attachment: file\\_\\[x\\].png");
     expect(message).toContain("Attachment URL: ``https://example.com/a`​b`​``");
-    expect(message).toContain("Kick reason: @​here \\*\\(reason\\)\\*");
+    expect(message).toContain("Enforcement reason: @​here \\*\\(reason\\)\\*");
   });
 
   test("splits oversized logs into Discord-safe chunks", async () => {
@@ -122,7 +128,7 @@ describe("formatModerationLog", () => {
       },
       {
         ...context,
-        kickReason: "x".repeat(4000),
+        enforcementReason: "x".repeat(4000),
       },
     );
 

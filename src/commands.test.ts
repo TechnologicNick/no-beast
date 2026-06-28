@@ -8,6 +8,7 @@ function buildSettings(overrides: Partial<GuildSettings> = {}): GuildSettings {
     guildId: "guild-1",
     scannerEnabled: true,
     dryRun: false,
+    moderationAction: "timeout-24h",
     kickMessageOverride: null,
     rejoinInviteUrl: null,
     moderationLogChannelId: null,
@@ -21,19 +22,56 @@ function createInteraction(overrides: {
   subcommand: string;
   strings?: Record<string, string>;
   channel?: { id: string; type: ChannelType };
+  attachment?: { name: string; url: string; size: number; contentType: string | null };
 }) {
   return {
     guildId: "guild-1",
     commandName: "nobeast",
     replied: false,
     deferred: false,
+    reply: mock(async () => undefined),
+    followUp: mock(async () => undefined),
     options: {
       getSubcommandGroup: () => overrides.group ?? null,
       getSubcommand: () => overrides.subcommand,
       getString: (name: string) => overrides.strings?.[name],
       getChannel: () => overrides.channel,
+      getAttachment: () => overrides.attachment,
     },
   } as never;
+}
+
+function createContext(replies: string[]): CommandHandlerContext {
+  return {
+    settingsStore: {
+      getGuildSettings: () => buildSettings(),
+      setScannerEnabled: () => undefined,
+      setDryRun: () => undefined,
+      setModerationAction: () => undefined,
+      setKickMessageOverride: () => undefined,
+      setRejoinInviteUrl: () => undefined,
+      setModerationLogChannelId: () => undefined,
+    },
+    matcher: {
+      matchBuffer: async () => ({
+        classification: "scam",
+        stage: "family-consensus",
+        details: [],
+        matchedFamilyId: "family-a",
+        confidence: 0.9,
+        roiVotes: 4,
+        rawMatches: [],
+        familyCandidates: [],
+        shortlistedFamilies: ["family-a"],
+        archetype: "x-post",
+      }),
+    },
+    fetchAttachmentBytes: async () => new Uint8Array([1, 2, 3]),
+    reply: async (_interaction, content) => {
+      replies.push(content);
+    },
+    logger: console,
+  };
 }
 
 describe("commands", () => {
@@ -111,20 +149,6 @@ describe("commands", () => {
 
   test("rejects custom messages without {serverName}", async () => {
     const replies: string[] = [];
-    const context: CommandHandlerContext = {
-      settingsStore: {
-        getGuildSettings: () => buildSettings(),
-        setScannerEnabled: () => undefined,
-        setDryRun: () => undefined,
-        setKickMessageOverride: () => undefined,
-        setRejoinInviteUrl: () => undefined,
-        setModerationLogChannelId: () => undefined,
-      },
-      reply: async (_interaction, content) => {
-        replies.push(content);
-      },
-      logger: console,
-    };
 
     await handleCommand(
       createInteraction({
@@ -132,7 +156,7 @@ describe("commands", () => {
         subcommand: "set",
         strings: { text: "hello" },
       }),
-      context,
+      createContext(replies),
     );
 
     expect(replies[0]).toContain("{serverName}");
@@ -141,20 +165,8 @@ describe("commands", () => {
   test("rejects invalid log channel types", async () => {
     const replies: string[] = [];
     const setChannel = mock(() => undefined);
-    const context: CommandHandlerContext = {
-      settingsStore: {
-        getGuildSettings: () => buildSettings(),
-        setScannerEnabled: () => undefined,
-        setDryRun: () => undefined,
-        setKickMessageOverride: () => undefined,
-        setRejoinInviteUrl: () => undefined,
-        setModerationLogChannelId: setChannel,
-      },
-      reply: async (_interaction, content) => {
-        replies.push(content);
-      },
-      logger: console,
-    };
+    const context = createContext(replies);
+    context.settingsStore.setModerationLogChannelId = setChannel;
 
     await handleCommand(
       createInteraction({
@@ -167,5 +179,43 @@ describe("commands", () => {
 
     expect(replies[0]).toContain("guild text channel");
     expect(setChannel).not.toHaveBeenCalled();
+  });
+
+  test("updates moderation action", async () => {
+    const replies: string[] = [];
+    const setModerationAction = mock(() => undefined);
+    const context = createContext(replies);
+    context.settingsStore.setModerationAction = setModerationAction;
+
+    await handleCommand(
+      createInteraction({
+        group: "action",
+        subcommand: "set",
+        strings: { mode: "ban" },
+      }),
+      context,
+    );
+
+    expect(setModerationAction).toHaveBeenCalledWith("guild-1", "ban");
+    expect(replies[0]).toContain("ban");
+  });
+
+  test("evaluates an image attachment", async () => {
+    const replies: string[] = [];
+    const interaction = createInteraction({
+      subcommand: "evaluate",
+      attachment: {
+        name: "image.png",
+        url: "https://example.com/image.png",
+        size: 1024,
+        contentType: "image/png",
+      },
+    });
+    const context = createContext(replies);
+
+    await handleCommand(interaction, context);
+
+    expect(interaction.reply).toHaveBeenCalledTimes(1);
+    expect(interaction.reply.mock.calls[0]?.[0]?.content).toContain("Evaluation for image.png");
   });
 });
