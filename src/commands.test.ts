@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { ChannelType, type ChatInputCommandInteraction } from "discord.js";
+import { ChannelType, PermissionFlagsBits, type ChatInputCommandInteraction } from "discord.js";
 import { buildCommandRegistrationBody, commandsMatch, handleCommand, syncCommandsIfNeeded } from "./commands.js";
 import type { CommandHandlerContext, GuildSettings } from "./types.js";
 
@@ -13,6 +13,9 @@ type InteractionStub = {
   commandName: string;
   replied: boolean;
   deferred: boolean;
+  memberPermissions: {
+    has(permission: bigint): boolean;
+  };
   reply: ReturnType<typeof mock<(payload: ReplyPayload) => Promise<void>>>;
   followUp: ReturnType<typeof mock<(payload: ReplyPayload) => Promise<void>>>;
   options: {
@@ -47,12 +50,17 @@ function createInteraction(overrides: {
   strings?: Record<string, string>;
   channel?: { id: string; type: ChannelType };
   attachment?: { name: string; url: string; size: number; contentType: string | null };
+  permissions?: bigint[];
 }): InteractionStub {
+  const permissions = new Set(overrides.permissions ?? [PermissionFlagsBits.ManageGuild]);
   return {
     guildId: "guild-1",
     commandName: "nobeast",
     replied: false,
     deferred: false,
+    memberPermissions: {
+      has: (permission: bigint) => permissions.has(permission),
+    },
     reply: mock<(payload: ReplyPayload) => Promise<void>>(async () => undefined),
     followUp: mock<(payload: ReplyPayload) => Promise<void>>(async () => undefined),
     options: {
@@ -202,6 +210,30 @@ describe("commands", () => {
     );
 
     expect(replies[0]).toContain("{serverName}");
+  });
+
+  test("allows administrators to use the command", async () => {
+    const replies: string[] = [];
+    const interaction = createInteraction({
+      subcommand: "status",
+      permissions: [PermissionFlagsBits.Administrator],
+    });
+
+    await handleCommand(asInteraction(interaction), createContext(replies));
+
+    expect(replies[0]).toContain("Scanner enabled");
+  });
+
+  test("rejects members without Manage Server or Administrator", async () => {
+    const replies: string[] = [];
+    const interaction = createInteraction({
+      subcommand: "status",
+      permissions: [],
+    });
+
+    await handleCommand(asInteraction(interaction), createContext(replies));
+
+    expect(replies[0]).toContain("Manage Server or Administrator");
   });
 
   test("rejects invalid log channel types", async () => {

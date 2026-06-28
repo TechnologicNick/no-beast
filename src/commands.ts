@@ -1,5 +1,6 @@
 import {
   ChannelType,
+  InteractionContextType,
   MessageFlags,
   PermissionFlagsBits,
   REST,
@@ -26,6 +27,13 @@ function isDiscordInviteUrl(value: string): boolean {
 
 function parseModerationAction(value: string): ModerationAction | null {
   return value === "timeout-24h" || value === "kick" || value === "ban" ? value : null;
+}
+
+function canManageCommand(interaction: ChatInputCommandInteraction): boolean {
+  return (
+    interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) === true ||
+    interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) === true
+  );
 }
 
 async function replyInChunks(interaction: ChatInputCommandInteraction, content: string): Promise<void> {
@@ -58,8 +66,8 @@ export function buildCommands() {
   const command = new SlashCommandBuilder()
     .setName(COMMAND_NAME)
     .setDescription("Manage no-beast scam detection settings.")
-    .setDMPermission(false)
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .setContexts([InteractionContextType.Guild])
+    .setDefaultMemberPermissions(PermissionFlagsBits.MuteMembers)
     .addSubcommand((subcommand) =>
       subcommand.setName("status").setDescription("Show current moderation settings."),
     )
@@ -291,6 +299,11 @@ export async function handleCommand(
   context: CommandHandlerContext,
 ): Promise<void> {
   if (!interaction.guildId || interaction.commandName !== COMMAND_NAME) {
+    return;
+  }
+
+  if (!canManageCommand(interaction)) {
+    await context.reply(interaction, "You need Manage Server or Administrator to use this command.");
     return;
   }
 
